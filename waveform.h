@@ -23,6 +23,14 @@
 #define DA_CTLREG_VAL       0x0a23      /* Control register value, channel 0 */
 #define CLK_PERIOD_NS       10000       /* System clock resolution (10 µs)   */
 
+/* ── Digital I/O Register Offsets (relative to iobase[3]) ───────────────── */
+/* Matches DAQ_test.c — configure with out8(DIO_CTLREG(b), 0x90) for        */
+/* Port A = input, Port B/C = output.                                        */
+#define DIO_PORTA(b)    ((b)[3] + 4)    /* Badr3 + 4 : Port A (input)       */
+#define DIO_PORTB(b)    ((b)[3] + 5)    /* Badr3 + 5 : Port B (output)      */
+#define DIO_PORTC(b)    ((b)[3] + 6)    /* Badr3 + 6 : Port C               */
+#define DIO_CTLREG(b)   ((b)[3] + 7)    /* Badr3 + 7 : DIO control register */
+
 /* ── Waveform Type Strings ───────────────────────────────────────────────── */
 #define WAVE_SINE       "sine"
 #define WAVE_SQUARE     "square"

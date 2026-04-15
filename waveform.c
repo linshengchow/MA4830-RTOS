@@ -21,6 +21,14 @@ void run_waveform(uintptr_t *iobase, char *type, float freq, float amp, float me
     clk.nsec = CLK_PERIOD_NS;
     clk.fract = 0;
 
+    /*
+     * Unipolar DAC: output range is 0.0 – 1.0 (0 V – 5 V).
+     * Ensure mean >= amp so the negative excursion never goes below 0,
+     * which would clip the lower half of the wave and produce a half-wave.
+     * For a full sine centred at mid-rail, mean = 0.5 and amp <= 0.5.
+     */
+    if (mean < amp) mean = amp;
+
     // 1. Prepare Waveform Data
     for (i = 0; i < NUM_POINTS; i++) {
         if (strcmp(type, WAVE_SINE) == 0) {
@@ -63,7 +71,8 @@ void run_waveform(uintptr_t *iobase, char *type, float freq, float amp, float me
     }
 }
 
-/* ── Entry Point ─────────────────────────────────────────────────────────── */
+/* ── Entry Point (only compiled when building waveform as a standalone program) */
+#ifdef WAVEFORM_MAIN
 
 int main(int argc, char *argv[]) {
     struct pci_dev_info info;
@@ -72,8 +81,13 @@ int main(int argc, char *argv[]) {
     int         i, badr[6];
 
     if (argc < 5) {
-        printf("Usage: %s <type: sine|square|triangle|sawtooth> "
-               "<freq> <amp 0-0.5> <mean 0-1>\n", argv[0]);
+        printf("Usage: %s <type> <freq> <amp> <mean>\n\n", argv[0]);
+        printf("  type  : sine | square | triangle | sawtooth\n");
+        printf("  freq  : frequency in Hz\n");
+        printf("  amp   : amplitude 0.0 – 0.5  (e.g. 0.5 for full scale)\n");
+        printf("  mean  : DC offset  0.0 – 1.0  (use 0.5 for full sine wave)\n\n");
+        printf("Example (full sine at 5 Hz):\n");
+        printf("  %s sine 5 0.5 0.5\n", argv[0]);
         return 1;
     }
 
@@ -109,3 +123,5 @@ int main(int argc, char *argv[]) {
     pci_detach_device(hdl);
     return 0;
 }
+
+#endif /* WAVEFORM_MAIN */

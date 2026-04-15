@@ -7,3 +7,7 @@
 
 #include "waveform.h"
 
+int main() {
+    // Generate a sine wave
+
+}

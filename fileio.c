@@ -2,8 +2,71 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <stdint.h>
+#include <pthread.h>
+#include <sys/neutrino.h>
+#include <sys/mman.h>
+#include <hw/pci.h>
+#include <hw/inout.h>
 
-#include "fileio_da.h"
+#include "waveform.h"
+#include "fileio.h"
+
+/* ── Record Thread Argument Type ─────────────────────────────────────────── */
+
+typedef struct {
+    const char *filename;
+    uintptr_t  *iobase;
+} record_args_t;
+
+/* ── ADC Register Map (PCI-DAS1602, relative to iobase[]) ───────────────── */
+/* Matches DAQ_test.c register definitions exactly.                          */
+#define ADC_INTERRUPT(b)    ((b)[1] + 0)    /* Badr1 + 0 : interrupt / ADC  */
+#define ADC_MUXCHAN(b)      ((b)[1] + 2)    /* Badr1 + 2 : MUX / channel    */
+#define ADC_TRIGGER(b)      ((b)[1] + 4)    /* Badr1 + 4 : trigger control  */
+#define ADC_AUTOCAL(b)      ((b)[1] + 6)    /* Badr1 + 6 : auto-calibration */
+#define ADC_DATA(b)         ((b)[2] + 0)    /* Badr2 + 0 : ADC data         */
+#define ADC_FIFOCLR(b)      ((b)[2] + 2)    /* Badr2 + 2 : ADC FIFO clear   */
+
+/* ── Static Hardware Helpers ─────────────────────────────────────────────── */
+
+/*
+ * adc_init - Initialise ADC control registers on the PCI-DAS1602.
+ * Mirrors the initialisation block from DAQ_test.c.
+ */
+void adc_init(uintptr_t *iobase)
+{
+    out16(ADC_INTERRUPT(iobase), 0x60c0);   /* Clear interrupts              */
+    out16(ADC_TRIGGER(iobase),   0x2081);   /* 10 MHz, Burst off, SW trig   */
+    out16(ADC_AUTOCAL(iobase),   0x007f);   /* Auto-calibration default      */
+    out16(ADC_FIFOCLR(iobase),   0);        /* Clear ADC FIFO                */
+    out16(ADC_MUXCHAN(iobase),   0x0D00);   /* SW trig, UP, SE, 5 V, ch 0   */
+}
+
+/*
+ * adc_read - Trigger a single ADC conversion on channel 0 and return the
+ * raw 16-bit result.  Sequence matches DAQ_test.c: set MUX, settle, trigger,
+ * poll EOC flag (bit 14 of MUXCHAN), then read.
+ */
+unsigned short adc_read(uintptr_t *iobase)
+{
+    out16(ADC_MUXCHAN(iobase), 0x0D00);             /* Ch 0, burst off       */
+    delay(1);                                        /* Allow mux to settle   */
+    out16(ADC_DATA(iobase), 0);                      /* Start conversion      */
+    while (!(in16(ADC_MUXCHAN(iobase)) & 0x4000));  /* Wait for EOC          */
+    return in16(ADC_DATA(iobase));
+}
+
+/*
+ * dac_write - Write one 16-bit value to DAC channel 0 via PCI-mapped iobase.
+ * Consistent with waveform.c output sequence.
+ */
+void dac_write(uintptr_t *iobase, unsigned short value)
+{
+    out16(DA_CTLREG(iobase), DA_CTLREG_VAL);
+    out16(DA_FIFOCLR(iobase), 0);
+    out16(DA_DATA(iobase),    value);
+}
 
 /* ── Shared Global Definitions ───────────────────────────────────────────── */
 pthread_mutex_t data_mutex       = PTHREAD_MUTEX_INITIALIZER;
@@ -51,13 +114,14 @@ void *file_io_record_thread(void *arg)
 
     FILE          *fp;
     unsigned short sample;
+    int            count = 0;
 
     if (filename == NULL || iobase == NULL) {
         fprintf(stderr, "Error: NULL argument passed to record thread\n");
         return NULL;
     }
 
-    fp = fopen(filename, "wb");
+    fp = fopen(filename, "w");
     if (fp == NULL) {
         perror("Failed to open file for writing");
         return NULL;
@@ -66,7 +130,7 @@ void *file_io_record_thread(void *arg)
     printf("Record thread started. Writing ADC data to %s\n", filename);
 
     while (!stop_signal) {
-        /* Trigger ADC conversion and wait for EOC */
+        /* Trigger ADC conversion on channel 0 and wait for EOC */
         sample = adc_read(iobase);
 
         /* Update shared value so other threads can read it */
@@ -74,20 +138,17 @@ void *file_io_record_thread(void *arg)
         shared_pot_value = sample;
         pthread_mutex_unlock(&data_mutex);
 
-        /* Persist raw 16-bit sample to binary file */
-        if (fwrite(&sample, sizeof(unsigned short), 1, fp) != 1) {
-            perror("Failed to write sample to file");
-            break;
-        }
+        /* Write in the same human-readable format as DAQ_test.c */
+        fprintf(fp, "ADC Chan: %02x Data [%3d]: %4x\n", 0, count, (unsigned int)sample);
+        printf(     "ADC Chan: %02x Data [%3d]: %4x\n", 0, count, (unsigned int)sample);
 
-        /* Flush to disk each sample for safety during demos */
         fflush(fp);
-
+        count++;
         usleep(SAMPLE_DELAY_US);
     }
 
     fclose(fp);
-    printf("Record thread stopped.\n");
+    printf("Record thread stopped. %d samples saved.\n", count);
     return NULL;
 }
 
@@ -103,7 +164,7 @@ int playback_file_to_dac(uintptr_t *iobase, const char *filename, useconds_t del
         return -1;
     }
 
-    fp = fopen(filename, "rb");
+    fp = fopen(filename, "r");
     if (fp == NULL) {
         perror("Failed to open file for reading");
         return -1;
@@ -111,14 +172,22 @@ int playback_file_to_dac(uintptr_t *iobase, const char *filename, useconds_t del
 
     printf("Playing back %s to DAC0...\n", filename);
 
-    while (fread(&value, sizeof(unsigned short), 1, fp) == 1) {
-        /*
-         * The recorded ADC samples are 16-bit (0x0000–0xFFFF).
-         * The DAC is 12-bit (0x000–0xFFF), so shift down by 4
-         * to map the full ADC range to the full DAC range.
-         */
-        dac_write(iobase, value >> 4);
-        usleep(delay_us);
+    /*
+     * Parse each line written by the record thread:
+     *   "ADC Chan: %02x Data [%3d]: %4x\n"
+     * The chan and count fields are discarded; only the hex ADC value is used.
+     * The DAC on the PCI-DAS1602 is 16-bit, so the raw ADC value is sent
+     * directly without any scaling.
+     */
+    {
+        unsigned int chan_dummy, count_dummy, raw;
+        while (fscanf(fp, " ADC Chan: %x Data [%d]: %x",
+                      &chan_dummy, &count_dummy, &raw) == 3) {
+            value = (unsigned short)(raw & 0xFFFF);
+            printf("Playback -> DAC: %04x\n", (unsigned int)value);
+            dac_write(iobase, value);
+            usleep(delay_us);
+        }
     }
 
     fclose(fp);
@@ -126,7 +195,8 @@ int playback_file_to_dac(uintptr_t *iobase, const char *filename, useconds_t del
     return 0;
 }
 
-/* ── Entry Point ─────────────────────────────────────────────────────────── */
+/* ── Entry Point (only compiled when building fileio as a standalone program) */
+#ifdef FILEIO_MAIN
 
 int main(int argc, char *argv[])
 {
@@ -196,3 +266,5 @@ int main(int argc, char *argv[])
     pci_detach_device(pci_hdl);
     return EXIT_SUCCESS;
 }
+
+#endif /* FILEIO_MAIN */
