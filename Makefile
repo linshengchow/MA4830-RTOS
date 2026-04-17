@@ -1,15 +1,15 @@
 CC     = cc
 CFLAGS = -Wall
-LIBS   = -lm -lpthread
+LIBS   = -lm
 
 # Build all programs
-all: function4 fileio waveform
+all: main fileio waveform
 
-# ── Function 4 : ADC amplitude control + DIO exit ────────────────────────
-# Links function4.c with fileio.c (adc_read, pci_setup, shared state)
+# ── Main program : full integration ──────────────────────────────────────
+# Links main.c with fileio.c (adc_read, pci_setup, shared state)
 # and waveform.c (run_waveform), plus math and pthread libraries.
-function4: function4.c fileio.c waveform.c fileio.h waveform.h
-	$(CC) $(CFLAGS) -o function4 function4.c fileio.c waveform.c $(LIBS)
+main: main.c fileio.c waveform.c fileio.h waveform.h
+	$(CC) $(CFLAGS) -o main main.c fileio.c waveform.c $(LIBS)
 
 # ── File I/O program (standalone) ────────────────────────────────────────
 # FILEIO_MAIN enables the main() in fileio.c
@@ -22,4 +22,4 @@ waveform: waveform.c waveform.h
 	$(CC) $(CFLAGS) -DWAVEFORM_MAIN -o waveform waveform.c -lm
 
 clean:
-	rm -f function4 fileio waveform
+	rm -f main fileio waveform
