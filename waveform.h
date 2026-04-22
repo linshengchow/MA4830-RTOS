@@ -37,19 +37,44 @@
 #define WAVE_TRIANGLE   "triangle"
 #define WAVE_SAWTOOTH   "sawtooth"
 
-/* ── Function Declarations ───────────────────────────────────────────────── */
+/* ── Public API ──────────────────────────────────────────────────────────── */
+
+/**
+ * generate_samples - Build one full cycle of a waveform into a 16-bit buffer.
+ *
+ * @param buf   Output buffer of at least 'n' uint16_t values.
+ * @param n     Number of samples per cycle (typically NUM_POINTS).
+ * @param type  One of WAVE_SINE, WAVE_SQUARE, WAVE_TRIANGLE, WAVE_SAWTOOTH.
+ * @param amp   Amplitude as a fraction of full scale (0.0 – 0.5).
+ * @param mean  DC offset as a fraction of full scale (0.0 – 1.0).
+ *
+ * Values are clipped to [0.0, 1.0] and scaled to the 16-bit DAC range.
+ * A local clamp ensures that (mean - amp) is never negative for this call,
+ * without mutating the caller's 'mean' value.  Safe to call every cycle.
+ */
+void generate_samples(uint16_t *buf, int n,
+                      const char *type, float amp, float mean);
+
+/**
+ * valid_wave_type - Return non-zero if 's' matches one of the four
+ * WAVE_* string constants.  Used for argument and menu validation.
+ */
+int valid_wave_type(const char *s);
 
 /**
  * run_waveform - Continuously outputs a waveform on the DAC.
  *
- * @param iobase  Mapped I/O base addresses for the PCI device (array of 6).
- * @param type    Waveform type string: "sine", "square", "triangle", "sawtooth".
+ * @param iobase  Mapped I/O base addresses for the PCI device.
+ * @param type    Waveform type string.
  * @param freq    Frequency in Hz.
- * @param amp     Amplitude (0.0 to 0.5, as a fraction of full scale).
- * @param mean    DC offset / mean level (0.0 to 1.0, as a fraction of full scale).
+ * @param amp     Amplitude (0.0 – 0.5).
+ * @param mean    DC offset (0.0 – 1.0).
  *
- * Note: This function runs an infinite loop and does not return.
+ * This function runs an infinite loop and does not return; it is used
+ * by the standalone test binary only.  The integrated program uses
+ * waveform_output_thread() in threads.c instead.
  */
-void run_waveform(uintptr_t *iobase, char *type, float freq, float amp, float mean);
+void run_waveform(uintptr_t *iobase, const char *type,
+                  float freq, float amp, float mean);
 
 #endif /* WAVEFORM_DA_H */
