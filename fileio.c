@@ -52,10 +52,6 @@ void *pci_setup(uintptr_t *iobase)
 
 /* ── ADC Primitives ──────────────────────────────────────────────────────── */
 
-/*
- * adc_init - Initialise ADC control registers.  Mirrors the reference
- * DAQ_test.c initialisation sequence exactly.
- */
 void adc_init(uintptr_t *iobase)
 {
     out16(ADC_INTERRUPT(iobase), 0x60c0);   /* Clear interrupts              */

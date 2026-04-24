@@ -1,6 +1,5 @@
 CC     = cc
 CFLAGS = -Wall
-# LIBS   = -lm -lsocket
 LIBS   = -lm 
 
 # Build all programs
